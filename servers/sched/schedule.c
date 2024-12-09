@@ -53,7 +53,7 @@ static void pick_cpu(struct schedproc * proc)
 #ifdef CONFIG_SMP
 	unsigned cpu, c;
 	unsigned cpu_load = (unsigned) -1;
-	
+
 	if (machine.processors_count == 1) {
 		proc->cpu = machine.bsp_id;
 		return;
@@ -99,10 +99,9 @@ int do_noquantum(message *m_ptr)
 	}
 
 	rmp = &schedproc[proc_nr_n];
-	if (rmp->priority < MIN_USER_Q) {
-		rmp->priority += 1; /* lower priority */
-	}
+        /// @brief the point here is to disable demoting of process
 
+	printf("PRIORITY: Process %d consumed Quantum : %d and  Priority : %d\n", rmp->endpoint,rmp->time_slice, rmp->priority);
 	if ((rv = schedule_process_local(rmp)) != OK) {
 		return rv;
 	}
@@ -128,6 +127,7 @@ int do_stop_scheduling(message *m_ptr)
 	}
 
 	rmp = &schedproc[proc_nr_n];
+	printf("process of priority %d has finished \n",rmp->priority);
 #ifdef CONFIG_SMP
 	cpu_proc[rmp->cpu]--;
 #endif
@@ -139,13 +139,19 @@ int do_stop_scheduling(message *m_ptr)
 /*===========================================================================*
  *				do_start_scheduling			     *
  *===========================================================================*/
+ static int counter=0;
+
 int do_start_scheduling(message *m_ptr)
 {
 	register struct schedproc *rmp;
 	int rv, proc_nr_n, parent_nr_n;
-	
+
+	//since rand() can't be used :( we use a non-sorted array instead
+	int rand[]={4,3,2,5,1};
+
+
 	/* we can handle two kinds of messages here */
-	assert(m_ptr->m_type == SCHEDULING_START || 
+	assert(m_ptr->m_type == SCHEDULING_START ||
 		m_ptr->m_type == SCHEDULING_INHERIT);
 
 	/* check who can send you requests */
@@ -163,6 +169,8 @@ int do_start_scheduling(message *m_ptr)
 	rmp->endpoint     = m_ptr->SCHEDULING_ENDPOINT;
 	rmp->parent       = m_ptr->SCHEDULING_PARENT;
 	rmp->max_priority = (unsigned) m_ptr->SCHEDULING_MAXPRIO;
+
+
 	if (rmp->max_priority >= NR_SCHED_QUEUES) {
 		return EINVAL;
 	}
@@ -187,17 +195,17 @@ int do_start_scheduling(message *m_ptr)
 		/* FIXME set the cpu mask */
 #endif
 	}
-	
+
 	switch (m_ptr->m_type) {
 
 	case SCHEDULING_START:
 		/* We have a special case here for system processes, for which
-		 * quanum and priority are set explicitly rather than inherited 
+		 * quanum and priority are set explicitly rather than inherited
 		 * from the parent */
 		rmp->priority   = rmp->max_priority;
 		rmp->time_slice = (unsigned) m_ptr->SCHEDULING_QUANTUM;
 		break;
-		
+
 	case SCHEDULING_INHERIT:
 		/* Inherit current priority and time slice from parent. Since there
 		 * is currently only one scheduler scheduling the whole system, this
@@ -206,11 +214,40 @@ int do_start_scheduling(message *m_ptr)
 				&parent_nr_n)) != OK)
 			return rv;
 
-		rmp->priority = schedproc[parent_nr_n].priority;
-		rmp->time_slice = schedproc[parent_nr_n].time_slice;
-		break;
 		
-	default: 
+		
+		//check for system process
+		if (schedproc[parent_nr_n].priority>=7)
+		{
+			//assign random priority
+			rmp->priority = (schedproc[parent_nr_n].priority+rand[counter++%5])%16;
+
+            		//just in case queue was 0 by mistake (may happen if children had too many children)
+			if (rmp->priority==0)
+				rmp->priority+=8;
+
+          	//print the priority for testing purposes
+			printf("child process was given a priority of %d\n",rmp->priority);
+           	 //reser counter .... prolly won't happen
+			if(counter>50000)
+				counter=0;
+
+		}
+       		//system process
+		else
+			rmp->priority = schedproc[parent_nr_n].priority;
+
+
+        //since we using non-preemptive priority give enough quantum to excute
+        //here we give default to system process so they don't take cpu forever (crash minix)
+        if(schedproc[parent_nr_n].priority>=6)
+        	rmp->time_slice = 100000;
+        else
+			rmp->time_slice = schedproc[parent_nr_n].time_slice;
+
+		break;
+
+	default:
 		/* not reachable */
 		assert(0);
 	}
@@ -356,7 +393,8 @@ static void balance_queues(struct timer *tp)
 	for (proc_nr=0, rmp=schedproc; proc_nr < NR_PROCS; proc_nr++, rmp++) {
 		if (rmp->flags & IN_USE) {
 			if (rmp->priority > rmp->max_priority) {
-				rmp->priority -= 1; /* increase priority */
+               	 //this line has been commented to disable promoting
+				//rmp->priority -= 1;
 				schedule_process_local(rmp);
 			}
 		}
